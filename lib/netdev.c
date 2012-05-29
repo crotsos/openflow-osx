@@ -313,60 +313,60 @@ netdev_delete_class(const struct netdev *netdev, uint16_t class_id)
     return 0;
 }
 
-static int
-open_queue_socket(const char * name, uint16_t class_id, int * fd)
-{
-    int error;
-    struct ifreq ifr;
-    struct sockaddr_ll sll;
-    uint32_t priority;
-
-    *fd = socket(PF_PACKET, SOCK_RAW, htons(0)); /* this is a write-only sock */
-    if (*fd < 0) {
-        return errno;
-    }
-
-    /* Set non-blocking mode */
-    error = set_nonblocking(*fd);
-    if (error) {
-        goto error_already_set;
-    }
-
-    /* Get ethernet device index. */
-    strncpy(ifr.ifr_name, name, sizeof ifr.ifr_name);
-    if (ioctl(*fd, SIOCGIFINDEX, &ifr) < 0) {
-        VLOG_ERR("ioctl(SIOCGIFINDEX) on %s device failed: %s",
-                 name, strerror(errno));
-        goto error;
-    }
-
-    /* Bind to specific ethernet device. */
-    memset(&sll, 0, sizeof sll);
-    sll.sll_family = PF_PACKET;
-    sll.sll_ifindex = ifr.ifr_ifindex;
-    if (bind(*fd, (struct sockaddr *) &sll, sizeof sll) < 0) {
-        VLOG_ERR("bind to %s failed: %s", name, strerror(errno));
-        goto error;
-    }
-
-    /* set the priority so that packets from this socket will go to the
-     * respective class_id/queue. Note that to refer to a tc class we use the
-     * following concatenation
-     * qdisc:handle on an unsigned integer. */
-    priority = (TC_QDISC<<16) + class_id;
-    if ( set_socket_priority(*fd,priority) < 0) {
-        VLOG_ERR("set socket priority failed for %s : %s",name,strerror(errno));
-        goto error;
-    }
-
-    return 0;
-
- error:
-    error = errno;
- error_already_set:
-    close(*fd);
-    return error;
-}
+//static int
+//open_queue_socket(const char * name, uint16_t class_id, int * fd)
+//{
+//    int error;
+//    struct ifreq ifr;
+//    struct sockaddr_ll sll;
+//    uint32_t priority;
+//
+//    *fd = socket(PF_PACKET, SOCK_RAW, htons(0)); /* this is a write-only sock */
+//    if (*fd < 0) {
+//        return errno;
+//    }
+//
+//    /* Set non-blocking mode */
+//    error = set_nonblocking(*fd);
+//    if (error) {
+//        goto error_already_set;
+//    }
+//
+//    /* Get ethernet device index. */
+//    strncpy(ifr.ifr_name, name, sizeof ifr.ifr_name);
+//    if (ioctl(*fd, SIOCGIFINDEX, &ifr) < 0) {
+//        VLOG_ERR("ioctl(SIOCGIFINDEX) on %s device failed: %s",
+//                 name, strerror(errno));
+//        goto error;
+//    }
+//
+//    /* Bind to specific ethernet device. */
+//    memset(&sll, 0, sizeof sll);
+//    sll.sll_family = PF_PACKET;
+//    sll.sll_ifindex = ifr.ifr_ifindex;
+//    if (bind(*fd, (struct sockaddr *) &sll, sizeof sll) < 0) {
+//        VLOG_ERR("bind to %s failed: %s", name, strerror(errno));
+//        goto error;
+//    }
+//
+//    /* set the priority so that packets from this socket will go to the
+//     * respective class_id/queue. Note that to refer to a tc class we use the
+//     * following concatenation
+//     * qdisc:handle on an unsigned integer. */
+//    priority = (TC_QDISC<<16) + class_id;
+//    if ( set_socket_priority(*fd,priority) < 0) {
+//        VLOG_ERR("set socket priority failed for %s : %s",name,strerror(errno));
+//        goto error;
+//    }
+//
+//    return 0;
+//
+// error:
+//    error = errno;
+// error_already_set:
+//    close(*fd);
+//    return error;
+//}
 
 
 /** Setup a classful queue for the specific device. Configured according to
@@ -430,190 +430,110 @@ do_remove_qdisc(const char *netdev_name)
 int
 netdev_setup_slicing(struct netdev *netdev, uint16_t num_queues)
 {
-    int i;
-    int * fd;
-    int error;
-
-    netdev->num_queues = num_queues;
-
-    /* remove any previous queue configuration for this device */
-    error = do_remove_qdisc(netdev->name);
-    if (error) {
-        return error;
-    }
-
-    /* Configure tc queue discipline to allow slicing queues */
-    error = do_setup_qdisc(netdev->name);
-    if (error) {
-        return error;
-    }
-
-    /* This define a root class for the queue disc. In order to allow spare
-     * bandwidth to be used efficiently, we need all the classes under a root
-     * class. For details, refer to :
-     * http://luxik.cdi.cz/~devik/qos/htb/ */
-    error = netdev_setup_root_class(netdev, TC_ROOT_CLASS,1000);
-    if (error) {
-        return error;
-    }
-    /* we configure a default class. This would be the best-effort, getting
-     * everything that remains from the other queues.tc requires a min-rate
-     * to configure a class, we put a min_rate here */
-    error = netdev_setup_class(netdev,TC_DEFAULT_CLASS,1);
-    if (error) {
-        return error;
-    }
-
-    /* the tc backend has been configured. Now, we need to create sockets that
-     * match the queue configuration. We need one socket per queue, plus one
-     * for default traffic.
-     * queue-attached sockets are only for outgoing traffic. Data are received
-     * only at the default socket.
-     * This is a limitation due to userspace implementation. We can map flows
-     * to specific queues using the skb->priority field. Having no access to
-     * sk_buffs from userspace, the only way to do the mapping is through the
-     * SO_PRIORITY option of the socket. This dictates the usage of one socket
-     * per queue. */
-
-    for (i=1; i <= netdev->num_queues; i++) {
-        fd = &netdev->queue_fd[i];
-        error = open_queue_socket(netdev->name,i,fd);
-        if (error) {
-            return error;
-        }
-    }
-
+    printf ("slicing not supported for this version\n");
     return 0;
+//    int i;
+//    int * fd;
+//    int error;
+//
+//    netdev->num_queues = num_queues;
+//
+//    /* remove any previous queue configuration for this device */
+//    error = do_remove_qdisc(netdev->name);
+//    if (error) {
+//        return error;
+//    }
+//
+//    /* Configure tc queue discipline to allow slicing queues */
+//    error = do_setup_qdisc(netdev->name);
+//    if (error) {
+//        return error;
+//    }
+//
+//    /* This define a root class for the queue disc. In order to allow spare
+//     * bandwidth to be used efficiently, we need all the classes under a root
+//     * class. For details, refer to :
+//     * http://luxik.cdi.cz/~devik/qos/htb/ */
+//    error = netdev_setup_root_class(netdev, TC_ROOT_CLASS,1000);
+//    if (error) {
+//        return error;
+//    }
+//    /* we configure a default class. This would be the best-effort, getting
+//     * everything that remains from the other queues.tc requires a min-rate
+//     * to configure a class, we put a min_rate here */
+//    error = netdev_setup_class(netdev,TC_DEFAULT_CLASS,1);
+//    if (error) {
+//        return error;
+//    }
+//
+//    /* the tc backend has been configured. Now, we need to create sockets that
+//     * match the queue configuration. We need one socket per queue, plus one
+//     * for default traffic.
+//     * queue-attached sockets are only for outgoing traffic. Data are received
+//     * only at the default socket.
+//     * This is a limitation due to userspace implementation. We can map flows
+//     * to specific queues using the skb->priority field. Having no access to
+//     * sk_buffs from userspace, the only way to do the mapping is through the
+//     * SO_PRIORITY option of the socket. This dictates the usage of one socket
+//     * per queue. */
+//
+//    for (i=1; i <= netdev->num_queues; i++) {
+//        fd = &netdev->queue_fd[i];
+//        error = open_queue_socket(netdev->name,i,fd);
+//        if (error) {
+//            return error;
+//        }
+//    }
+//
+//    return 0;
 }
 
 static void
 do_ethtool(struct netdev *netdev)
 {
     struct ifreq ifr;
-    struct ethtool_cmd ecmd;
+//    struct ethtool_cmd ecmd;
 
     netdev->curr = 0;
     netdev->supported = 0;
     netdev->advertised = 0;
     netdev->peer = 0;
-    netdev->speed = SPEED_1000;  /* default to 1Gbps link */
+    netdev->speed = 1000;  /* default to 1Gbps link */
 
     memset(&ifr, 0, sizeof ifr);
     strncpy(ifr.ifr_name, netdev->name, sizeof ifr.ifr_name);
-    ifr.ifr_data = (caddr_t) &ecmd;
 
-    memset(&ecmd, 0, sizeof ecmd);
-    ecmd.cmd = ETHTOOL_GSET;
-    if (ioctl(netdev->netdev_fd, SIOCETHTOOL, &ifr) == 0) {
-        if (ecmd.supported & SUPPORTED_10baseT_Half) {
-            netdev->supported |= OFPPF_10MB_HD;
-        }
-        if (ecmd.supported & SUPPORTED_10baseT_Full) {
-            netdev->supported |= OFPPF_10MB_FD;
-        }
-        if (ecmd.supported & SUPPORTED_100baseT_Half)  {
-            netdev->supported |= OFPPF_100MB_HD;
-        }
-        if (ecmd.supported & SUPPORTED_100baseT_Full) {
-            netdev->supported |= OFPPF_100MB_FD;
-        }
-        if (ecmd.supported & SUPPORTED_1000baseT_Half) {
-            netdev->supported |= OFPPF_1GB_HD;
-        }
-        if (ecmd.supported & SUPPORTED_1000baseT_Full) {
-            netdev->supported |= OFPPF_1GB_FD;
-        }
-        if (ecmd.supported & SUPPORTED_10000baseT_Full) {
-            netdev->supported |= OFPPF_10GB_FD;
-        }
-        if (ecmd.supported & SUPPORTED_TP) {
-            netdev->supported |= OFPPF_COPPER;
-        }
-        if (ecmd.supported & SUPPORTED_FIBRE) {
-            netdev->supported |= OFPPF_FIBER;
-        }
-        if (ecmd.supported & SUPPORTED_Autoneg) {
-            netdev->supported |= OFPPF_AUTONEG;
-        }
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,14)
-        if (ecmd.supported & SUPPORTED_Pause) {
-            netdev->supported |= OFPPF_PAUSE;
-        }
-        if (ecmd.supported & SUPPORTED_Asym_Pause) {
-            netdev->supported |= OFPPF_PAUSE_ASYM;
-        }
-#endif /* kernel >= 2.6.14 */
+//    memset(&ecmd, 0, sizeof ecmd);
+//    ecmd.cmd = ETHTOOL_GSET;
+    netdev->supported |= OFPPF_10MB_HD;
+    netdev->supported |= OFPPF_10MB_FD;
+    netdev->supported |= OFPPF_100MB_HD;
+    netdev->supported |= OFPPF_100MB_FD;
+    netdev->supported |= OFPPF_1GB_HD;
+    netdev->supported |= OFPPF_1GB_FD;
+    netdev->supported |= OFPPF_10GB_FD;
+    netdev->supported |= OFPPF_COPPER;
+    netdev->supported |= OFPPF_FIBER;
+    netdev->supported |= OFPPF_AUTONEG;
+    
+    /* Set the advertised features */
+    netdev->advertised |= OFPPF_10MB_HD;
+    netdev->advertised |= OFPPF_10MB_FD;
+    netdev->advertised |= OFPPF_100MB_HD;
+    netdev->advertised |= OFPPF_100MB_FD;
+    netdev->advertised |= OFPPF_1GB_HD;
+    netdev->advertised |= OFPPF_1GB_FD;
+    netdev->advertised |= OFPPF_10GB_FD;
+    netdev->advertised |= OFPPF_COPPER;
+    netdev->advertised |= OFPPF_FIBER;
+    netdev->advertised |= OFPPF_AUTONEG;
+    
+    netdev->curr = OFPPF_10GB_FD;
+    
+    netdev->curr |= OFPPF_COPPER;
+    netdev->curr |= OFPPF_AUTONEG;
 
-        /* Set the advertised features */
-        if (ecmd.advertising & ADVERTISED_10baseT_Half) {
-            netdev->advertised |= OFPPF_10MB_HD;
-        }
-        if (ecmd.advertising & ADVERTISED_10baseT_Full) {
-            netdev->advertised |= OFPPF_10MB_FD;
-        }
-        if (ecmd.advertising & ADVERTISED_100baseT_Half) {
-            netdev->advertised |= OFPPF_100MB_HD;
-        }
-        if (ecmd.advertising & ADVERTISED_100baseT_Full) {
-            netdev->advertised |= OFPPF_100MB_FD;
-        }
-        if (ecmd.advertising & ADVERTISED_1000baseT_Half) {
-            netdev->advertised |= OFPPF_1GB_HD;
-        }
-        if (ecmd.advertising & ADVERTISED_1000baseT_Full) {
-            netdev->advertised |= OFPPF_1GB_FD;
-        }
-        if (ecmd.advertising & ADVERTISED_10000baseT_Full) {
-            netdev->advertised |= OFPPF_10GB_FD;
-        }
-        if (ecmd.advertising & ADVERTISED_TP) {
-            netdev->advertised |= OFPPF_COPPER;
-        }
-        if (ecmd.advertising & ADVERTISED_FIBRE) {
-            netdev->advertised |= OFPPF_FIBER;
-        }
-        if (ecmd.advertising & ADVERTISED_Autoneg) {
-            netdev->advertised |= OFPPF_AUTONEG;
-        }
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,14)
-        if (ecmd.advertising & ADVERTISED_Pause) {
-            netdev->advertised |= OFPPF_PAUSE;
-        }
-        if (ecmd.advertising & ADVERTISED_Asym_Pause) {
-            netdev->advertised |= OFPPF_PAUSE_ASYM;
-        }
-#endif /* kernel >= 2.6.14 */
-
-        /* Set the current features */
-        if (ecmd.speed == SPEED_10) {
-            netdev->curr = (ecmd.duplex) ? OFPPF_10MB_FD : OFPPF_10MB_HD;
-        }
-        else if (ecmd.speed == SPEED_100) {
-            netdev->curr = (ecmd.duplex) ? OFPPF_100MB_FD : OFPPF_100MB_HD;
-        }
-        else if (ecmd.speed == SPEED_1000) {
-            netdev->curr = (ecmd.duplex) ? OFPPF_1GB_FD : OFPPF_1GB_HD;
-        }
-        else if (ecmd.speed == SPEED_10000) {
-            netdev->curr = OFPPF_10GB_FD;
-        }
-
-        if (ecmd.port == PORT_TP) {
-            netdev->curr |= OFPPF_COPPER;
-        }
-        else if (ecmd.port == PORT_FIBRE) {
-            netdev->curr |= OFPPF_FIBER;
-        }
-
-        if (ecmd.autoneg) {
-            netdev->curr |= OFPPF_AUTONEG;
-        }
-
-        netdev->speed = ecmd.speed;
-
-    } else {
-        VLOG_DBG("ioctl(SIOCETHTOOL) failed: %s", strerror(errno));
-    }
+    netdev->speed = 1000;
 }
 
 /* Opens the network device named 'name' (e.g. "eth0") and returns zero if
