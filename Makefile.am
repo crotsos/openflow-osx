@@ -23,7 +23,8 @@ if NDEBUG
 AM_CPPFLAGS += -DNDEBUG
 AM_CFLAGS += -fomit-frame-pointer
 else
-AM_LDFLAGS = -export-dynamic
+AM_LDFLAGS = -lpcap 
+# -export-dynamic
 endif
 
 CLEANFILES =

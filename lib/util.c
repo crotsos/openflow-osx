@@ -138,16 +138,16 @@ xasprintf(const char *format, ...)
     return s;
 }
 
-void
-strlcpy(char *dst, const char *src, size_t size)
-{
-    if (size > 0) {
-        size_t n = strlen(src);
-        size_t n_copy = MIN(n, size - 1);
-        memcpy(dst, src, n_copy);
-        dst[n_copy] = '\0';
-    }
-}
+//void
+//strlcpy(char *dst, const char *src, size_t size)
+//{
+//    if (size > 0) {
+//        size_t n = strlen(src);
+//        size_t n_copy = MIN(n, size - 1);
+//        memcpy(dst, src, n_copy);
+//        dst[n_copy] = '\0';
+//    }
+//}
 
 void
 ofp_fatal(int err_no, const char *format, ...)

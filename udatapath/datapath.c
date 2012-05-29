@@ -490,7 +490,7 @@ dp_add_port(struct datapath *dp, const char *netdev, uint16_t num_queues)
             return new_port(dp, port, port_no, netdev, NULL, num_queues);
         }
     }
-    return EXFULL;
+    return ECONNRESET;
 }
 #endif /* OF_HW_PLAT */
 
@@ -512,7 +512,7 @@ dp_add_local_port(struct datapath *dp, const char *netdev, uint16_t num_queues)
         }
         return error;
     } else {
-        return EXFULL;
+        return ECONNRESET;
     }
 }
 

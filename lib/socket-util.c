@@ -75,7 +75,7 @@ int
 set_socket_priority(int fd, int priority)
 {
     int prio = priority;
-    return setsockopt(fd, SOL_SOCKET, SO_PRIORITY, (char *)&prio, sizeof(prio));
+//    return setsockopt(fd, SOL_SOCKET, SO_PRIORITY, (char *)&prio, sizeof(prio));
 }
 
 /* Returns the maximum valid FD value, plus 1. */

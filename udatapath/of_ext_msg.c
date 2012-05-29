@@ -74,7 +74,7 @@ port_add_queue(struct sw_port *p, uint32_t queue_id,
             return new_queue(p,q,queue_id,queue_no,mr);
         }
     }
-    return EXFULL;
+    return ECONNRESET;
 }
 
 static int
@@ -186,7 +186,7 @@ recv_of_exp_queue_modify(struct datapath *dp,
         else {
             /* create new queue */
             error = port_add_queue(p,queue_id, mr);
-            if (error == EXFULL) {
+            if (error == ECONNRESET) {
                 dp_send_error_msg(dp, sender, OFPET_QUEUE_OP_FAILED,
                                   OFPQOFC_EPERM, oh,
                                   ntohs(ofq_modify->header.header.length));

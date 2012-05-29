@@ -39,14 +39,15 @@
 #include <fcntl.h>
 #include <arpa/inet.h>
 #include <inttypes.h>
-#include <linux/if_tun.h>
+#include <pcap/pcap.h>
+// #include <linux/if_tun.h>
 
 /* Fix for some compile issues we were experiencing when setting up openwrt
  * with the 2.4 kernel. linux/ethtool.h seems to use kernel-style inttypes,
  * which breaks in userspace.
  */
 #ifndef __KERNEL__
-#include <linux/types.h>
+//#include <linux/types.h>
 #define u8 __u8
 #define u16 __u16
 #define u32 __u32
@@ -57,18 +58,18 @@
 #define s64 __s64
 #endif
 
-#include <linux/ethtool.h>
-#include <linux/rtnetlink.h>
-#include <linux/sockios.h>
-#include <linux/version.h>
+// #include <linux/ethtool.h>
+// #include <linux/rtnetlink.h>
+// #include <linux/sockios.h>
+// #include <linux/version.h>
 #include <sys/types.h>
 #include <sys/ioctl.h>
 #include <sys/socket.h>
-#include <netpacket/packet.h>
+// #include <netpacket/packet.h>
 #include <net/ethernet.h>
 #include <net/if.h>
 #include <net/if_arp.h>
-#include <net/if_packet.h>
+// #include <net/if_packet.h>
 #include <net/route.h>
 #include <netinet/in.h>
 #include <stdlib.h>
@@ -101,6 +102,7 @@ struct netdev {
 
     /* File descriptors.  For ordinary network devices, the two fds below are
      * the same; for tap devices, they differ. */
+    pcap_t *netdev_pcap;         /* pcap object to read and send packets */
     int netdev_fd;              /* Network device. */
     int tap_fd;                 /* TAP character device, if any, otherwise the
                                  * network device. */
@@ -562,17 +564,35 @@ netdev_open(const char *name, int ethertype, struct netdev **netdevp)
 int
 netdev_open_tap(const char *name, struct netdev **netdevp)
 {
-    static const char tap_dev[] = "/dev/net/tun";
-    struct ifreq ifr;
+//    static const char tap_dev[] = "/dev/net/tun";
+//    struct ifreq ifr;
     int error;
     int tap_fd;
+    char dev_file[IFNAMSIZ];
 
-    tap_fd = open(tap_dev, O_RDWR);
+    snprintf(dev_file, sizeof dev_file, "/dev/tap%s", name);
+
+    tap_fd = open(dev_file, O_RDWR);
     if (tap_fd < 0) {
-        ofp_error(errno, "opening \"%s\" failed", tap_dev);
+        ofp_error(errno, "opening \"%s\" failed", dev_file);
         return errno;
     }
 
+    error = set_nonblocking(tap_fd);
+    if (error) {
+        ofp_error(error, "set_nonblocking on \"%s\" failed", dev_file);
+        close(tap_fd);
+        return error;
+    }
+
+    error = do_open_netdev(name, NETDEV_ETH_TYPE_NONE, tap_fd,
+                           netdevp);
+    if (error) {
+        close(tap_fd);
+    } 
+ /*
+    // I am guessing that this means that we are creating a tun/tap 
+    // device with name name and set it up. 
     memset(&ifr, 0, sizeof ifr);
     ifr.ifr_flags = IFF_TAP | IFF_NO_PI;
     if (name) {
@@ -584,19 +604,7 @@ netdev_open_tap(const char *name, struct netdev **netdevp)
         close(tap_fd);
         return error;
     }
-
-    error = set_nonblocking(tap_fd);
-    if (error) {
-        ofp_error(error, "set_nonblocking on \"%s\" failed", tap_dev);
-        close(tap_fd);
-        return error;
-    }
-
-    error = do_open_netdev(ifr.ifr_name, NETDEV_ETH_TYPE_NONE, tap_fd,
-                           netdevp);
-    if (error) {
-        close(tap_fd);
-    }
+ */
     return error;
 }
 
@@ -605,7 +613,6 @@ do_open_netdev(const char *name, int ethertype, int tap_fd,
                struct netdev **netdev_)
 {
     int netdev_fd;
-    struct sockaddr_ll sll;
     struct ifreq ifr;
     unsigned int ifindex;
     uint8_t etheraddr[ETH_ADDR_LEN];
@@ -615,42 +622,34 @@ do_open_netdev(const char *name, int ethertype, int tap_fd,
     int hwaddr_family;
     int error;
     struct netdev *netdev;
+    pcap_t *netdev_pcap = NULL;    
+    char errbuf[PCAP_ERRBUF_SIZE];
 
     init_netdev();
     *netdev_ = NULL;
 
+    /* Use libpcap to setup a raw socket like mechains? */
+    /* Bind to specific ethernet device. */
+    netdev_pcap = pcap_open_live(name, 24000, 1, 100, errbuf);
+    if(netdev_pcap == NULL) 
+    {
+      fprintf(stderr, "Cannot open device %s\n", name);
+      exit(1);
+    }
+
     /* Create raw socket. */
-    netdev_fd = socket(PF_PACKET, SOCK_RAW,
-                       htons(ethertype == NETDEV_ETH_TYPE_NONE ? 0
-                             : ethertype == NETDEV_ETH_TYPE_ANY ? ETH_P_ALL
-                             : ethertype == NETDEV_ETH_TYPE_802_2 ? ETH_P_802_2
-                             : ethertype));
-    if (netdev_fd < 0) {
-        return errno;
+    netdev_fd = pcap_get_selectable_fd(netdev_pcap);
+    if(netdev_fd == -1) 
+    {
+      fprintf(stderr, "couldn't get a selectable fd on %s\n", name);
+      exit(1);
     }
 
     /* Set non-blocking mode. */
-    error = set_nonblocking(netdev_fd);
-    if (error) {
-        goto error_already_set;
-    }
-
-    /* Get ethernet device index. */
-    strncpy(ifr.ifr_name, name, sizeof ifr.ifr_name);
-    if (ioctl(netdev_fd, SIOCGIFINDEX, &ifr) < 0) {
-        VLOG_ERR("ioctl(SIOCGIFINDEX) on %s device failed: %s",
-                 name, strerror(errno));
-        goto error;
-    }
-    ifindex = ifr.ifr_ifindex;
-
-    /* Bind to specific ethernet device. */
-    memset(&sll, 0, sizeof sll);
-    sll.sll_family = AF_PACKET;
-    sll.sll_ifindex = ifindex;
-    if (bind(netdev_fd, (struct sockaddr *) &sll, sizeof sll) < 0) {
-        VLOG_ERR("bind to %s failed: %s", name, strerror(errno));
-        goto error;
+    if (pcap_setnonblock(netdev_pcap, 1, errbuf) -1)  
+    {
+      fprintf(stderr, "couldn't set nonblock on %s\n", name);
+      exit(1); 
     }
 
     if (ethertype != NETDEV_ETH_TYPE_NONE) {
@@ -664,18 +663,23 @@ do_open_netdev(const char *name, int ethertype, int tap_fd,
         }
     }
 
-    /* Get MAC address. */
-    if (ioctl(netdev_fd, SIOCGIFHWADDR, &ifr) < 0) {
-        VLOG_ERR("ioctl(SIOCGIFHWADDR) on %s device failed: %s",
-                 name, strerror(errno));
-        goto error;
-    }
-    hwaddr_family = ifr.ifr_hwaddr.sa_family;
-    if (hwaddr_family != AF_UNSPEC && hwaddr_family != ARPHRD_ETHER) {
-        VLOG_WARN("%s device has unknown hardware address family %d",
-                  name, hwaddr_family);
-    }
-    memcpy(etheraddr, ifr.ifr_hwaddr.sa_data, sizeof etheraddr);
+    /*  Create raw socket. */
+    netdev_fd = socket(AF_INET, SOCK_DGRAM, 0);  
+    /*  Get ethernet device index. */
+    strncpy(ifr.ifr_name, name, sizeof ifr.ifr_name);
+
+//    /* Get MAC address. */
+//    if (ioctl(netdev_fd, SIOCGIFHWADDR, &ifr) < 0) {
+//        VLOG_ERR("ioctl(SIOCGIFHWADDR) on %s device failed: %s",
+//                 name, strerror(errno));
+//        goto error;
+//    }
+//    hwaddr_family = ifr.ifr_hwaddr.sa_family;
+//    if (hwaddr_family != AF_UNSPEC && hwaddr_family != ARPHRD_ETHER) {
+//        VLOG_WARN("%s device has unknown hardware address family %d",
+//                  name, hwaddr_family);
+//    }
+//    memcpy(etheraddr, ifr.ifr_hwaddr.sa_data, sizeof etheraddr);
 
     /* Get MTU. */
     if (ioctl(netdev_fd, SIOCGIFMTU, &ifr) < 0) {
@@ -685,13 +689,7 @@ do_open_netdev(const char *name, int ethertype, int tap_fd,
     }
     mtu = ifr.ifr_mtu;
 
-    /* Get TX queue length. */
-    if (ioctl(netdev_fd, SIOCGIFTXQLEN, &ifr) < 0) {
-        VLOG_ERR("ioctl(SIOCGIFTXQLEN) on %s device failed: %s",
-                 name, strerror(errno));
-        goto error;
-    }
-    txqlen = ifr.ifr_qlen;
+    txqlen = 0;
 
     get_ipv6_address(name, &in6);
 
@@ -702,6 +700,7 @@ do_open_netdev(const char *name, int ethertype, int tap_fd,
     netdev->txqlen = txqlen;
     netdev->hwaddr_family = hwaddr_family;
     netdev->netdev_fd = netdev_fd;
+    netdev->netdev_pcap = netdev_pcap;
     netdev->tap_fd = tap_fd < 0 ? netdev_fd : tap_fd;
     netdev->queue_fd[0] = netdev->tap_fd;
     memcpy(netdev->etheraddr, etheraddr, sizeof etheraddr);
@@ -795,55 +794,31 @@ int
 netdev_recv(struct netdev *netdev, struct ofpbuf *buffer)
 {
     ssize_t n_bytes;
-    struct sockaddr_ll sll;
-    socklen_t sll_len;
+    struct pcap_pkthdr *pkt_header;
+    const u_char *pkt_data;
+    int ret;
 
     assert(buffer->size == 0);
     assert(ofpbuf_tailroom(buffer) >= ETH_TOTAL_MIN);
 
-    /* prepare to call recvfrom */
-    memset(&sll,0,sizeof sll);
-    sll_len = sizeof sll;
+    /* read a packet */
+    ret = 0;
+    do {
+      ret = pcap_next_ex(netdev->netdev_pcap, &pkt_header, 
+          &pkt_data);
+    } while (ret == 0);
 
-    /* cannot execute recvfrom over a tap device */
-    if (!strncmp(netdev->name, "tap", 3)) {
-        do {
-            n_bytes = read(netdev->tap_fd, ofpbuf_tail(buffer),
-                           (ssize_t)ofpbuf_tailroom(buffer));
-        } while (n_bytes < 0 && errno == EINTR);
-    }
-    else {
-        do {
-            n_bytes = recvfrom(netdev->tap_fd, ofpbuf_tail(buffer),
-                               (ssize_t)ofpbuf_tailroom(buffer), 0,
-                               (struct sockaddr *)&sll, &sll_len);
-        } while (n_bytes < 0 && errno == EINTR);
-    }
-    if (n_bytes < 0) {
-        if (errno != EAGAIN) {
-            VLOG_WARN_RL(&rl, "error receiving Ethernet packet on %s: %s",
-                         strerror(errno), netdev->name);
-        }
-        return errno;
-    } else {
-        /* we have multiple raw sockets at the same interface, so we also
-         * receive what others send, and need to filter them out.
-         * TODO(yiannisy): can we install this as a BPF at kernel? */
-        if (sll.sll_pkttype == PACKET_OUTGOING) {
-            return EAGAIN;
-        }
-
-
-        buffer->size += n_bytes;
-
-        /* When the kernel internally sends out an Ethernet frame on an
-         * interface, it gives us a copy *before* padding the frame to the
-         * minimum length.  Thus, when it sends out something like an ARP
-         * request, we see a too-short frame.  So pad it out to the minimum
-         * length. */
-        pad_to_minimum_length(buffer);
-        return 0;
-    }
+    if(ret == 1) {
+      n_bytes = ((ssize_t)ofpbuf_tailroom(buffer) > pkt_header->caplen) ?
+        pkt_header->caplen : (ssize_t)ofpbuf_tailroom(buffer);
+      memcpy(ofpbuf_tail(buffer), pkt_data, n_bytes);
+      buffer->size += n_bytes;
+      //pad_to_minimum_length(buffer);
+    } else if(ret < 0){
+      VLOG_WARN_RL(&rl, "pcap_next_ex failed to read packet\n");
+      return ENOTTY;
+    } 
+    return 0;
 }
 
 /* Registers with the poll loop to wake up from the next call to poll_block()
@@ -938,15 +913,18 @@ netdev_set_etheraddr(struct netdev *netdev, const uint8_t mac[ETH_ADDR_LEN])
     struct ifreq ifr;
 
     memset(&ifr, 0, sizeof ifr);
+    ifr.ifr_addr.sa_family = AF_INET;
     strncpy(ifr.ifr_name, netdev->name, sizeof ifr.ifr_name);
-    ifr.ifr_hwaddr.sa_family = netdev->hwaddr_family;
+    VLOG_WARN("set etheraddr is not working currently\n");
+/*    ifr.ifr_hwaddr.sa_family = netdev->hwaddr_family;
+    
     memcpy(ifr.ifr_hwaddr.sa_data, mac, ETH_ADDR_LEN);
-    if (ioctl(netdev->netdev_fd, SIOCSIFHWADDR, &ifr) < 0) {
+    if (ioctl(netdev->netdev_fd, SIOCSIFLLADDR, &ifr) < 0) {
         VLOG_ERR("ioctl(SIOCSIFHWADDR) on %s device failed: %s",
                  netdev->name, strerror(errno));
         return errno;
     }
-    memcpy(netdev->etheraddr, mac, ETH_ADDR_LEN);
+    memcpy(netdev->etheraddr, mac, ETH_ADDR_LEN); */ 
     return 0;
 }
 
@@ -1069,7 +1047,7 @@ netdev_set_in4(struct netdev *netdev, struct in_addr addr, struct in_addr mask)
 int
 netdev_add_router(struct in_addr router)
 {
-    struct in_addr any = { INADDR_ANY };
+/*    struct in_addr any = { INADDR_ANY };
     struct rtentry rt;
     int error;
 
@@ -1082,7 +1060,9 @@ netdev_add_router(struct in_addr router)
     if (error) {
         VLOG_WARN("ioctl(SIOCADDRT): %s", strerror(error));
     }
-    return error;
+    return error;*/
+
+    return 0;
 }
 
 /* If 'netdev' has an assigned IPv6 address, sets '*in6' to that address (if
@@ -1195,8 +1175,8 @@ netdev_arp_lookup(const struct netdev *netdev,
     pa->sin_port = 0;
     r.arp_ha.sa_family = ARPHRD_ETHER;
     r.arp_flags = 0;
-    strncpy(r.arp_dev, netdev->name, sizeof r.arp_dev);
-    retval = ioctl(af_inet_sock, SIOCGARP, &r) < 0 ? errno : 0;
+//    strncpy(r.arp_dev, netdev->name, sizeof r.arp_dev);
+    retval = ioctl(af_inet_sock, SIOCARPIPLL, &r) < 0 ? errno : 0;
     if (!retval) {
         memcpy(mac, r.arp_ha.sa_data, ETH_ADDR_LEN);
     } else if (retval != ENXIO) {
@@ -1264,50 +1244,50 @@ struct netdev_monitor {
     struct svec changed;
 };
 
-/* Policy for RTNLGRP_LINK messages.
- *
- * There are *many* more fields in these messages, but currently we only care
- * about interface names. */
-static const struct nl_policy rtnlgrp_link_policy[] = {
-    [IFLA_IFNAME] = { .type = NL_A_STRING, .optional = false },
-};
+///* Policy for RTNLGRP_LINK messages.
+// *
+// * There are *many* more fields in these messages, but currently we only care
+// * about interface names. */
+//static const struct nl_policy rtnlgrp_link_policy[] = {
+//    [IFLA_IFNAME] = { .type = NL_A_STRING, .optional = false },
+//};
 
 static const char *lookup_netdev(const struct netdev_monitor *, const char *);
 static const char *pop_changed(struct netdev_monitor *);
 static const char *all_netdevs_changed(struct netdev_monitor *);
 
-/* Creates a new network device monitor that initially monitors no
- * devices.  On success, sets '*monp' to the new network monitor and returns
- * 0; on failure, sets '*monp' to a null pointer and returns a positive errno
- * value. */
+// /* Creates a new network device monitor that initially monitors no
+//  * devices.  On success, sets '*monp' to the new network monitor and returns
+//  * 0; on failure, sets '*monp' to a null pointer and returns a positive errno
+//  * value. */
 int
 netdev_monitor_create(struct netdev_monitor **monp)
 {
-    struct netdev_monitor *mon;
-    struct nl_sock *sock;
-    int error;
-
-    *monp = NULL;
-    error = nl_sock_create(NETLINK_ROUTE, RTNLGRP_LINK, 0, 0, &sock);
-    if (error) {
-        /* XXX Fall back to polling?  Non-root is not allowed to subscribe to
-         * multicast groups but can still poll network device state. */
-        VLOG_WARN("could not create rtnetlink socket: %s", strerror(error));
-        return error;
-    }
-
-    mon = *monp = xmalloc(sizeof *mon);
-    mon->sock = sock;
-    svec_init(&mon->netdevs);
-    svec_init(&mon->changed);
-    return 0;
+//     struct netdev_monitor *mon;
+//     struct nl_sock *sock;
+//     int error;
+// 
+//     *monp = NULL;
+//     error = nl_sock_create(NETLINK_ROUTE, RTNLGRP_LINK, 0, 0, &sock);
+//     if (error) {
+//         /* XXX Fall back to polling?  Non-root is not allowed to subscribe to
+//          * multicast groups but can still poll network device state. */
+//         VLOG_WARN("could not create rtnetlink socket: %s", strerror(error));
+//         return error;
+//     }
+// 
+//     mon = *monp = xmalloc(sizeof *mon);
+//     mon->sock = sock;
+//     svec_init(&mon->netdevs);
+//     svec_init(&mon->changed);
+     return 0;
 }
 
 void
 netdev_monitor_destroy(struct netdev_monitor *mon)
 {
     if (mon) {
-        nl_sock_destroy(mon->sock);
+        //nl_sock_destroy(mon->sock);
         svec_destroy(&mon->netdevs);
         svec_destroy(&mon->changed);
         free(mon);
@@ -1330,57 +1310,58 @@ netdev_monitor_set_devices(struct netdev_monitor *mon,
     svec_sort(&mon->netdevs);
 }
 
-/* If the state of any network device has changed, returns its name.  The
- * caller must not modify or free the name.
- *
- * This function can return "false positives".  The caller is responsible for
- * verifying that the network device's state actually changed, if necessary.
- *
- * If no network device's state has changed, returns a null pointer. */
+// /* If the state of any network device has changed, returns its name.  The
+//  * caller must not modify or free the name.
+//  *
+//  * This function can return "false positives".  The caller is responsible for
+//  * verifying that the network device's state actually changed, if necessary.
+//  *
+//  * If no network device's state has changed, returns a null pointer. */
 const char *
 netdev_monitor_poll(struct netdev_monitor *mon)
 {
-    static struct vlog_rate_limit slow_rl = VLOG_RATE_LIMIT_INIT(1, 5);
-    const char *changed_name;
-
-    changed_name = pop_changed(mon);
-    if (changed_name) {
-        return changed_name;
-    }
-
-    for (;;) {
-        struct ofpbuf *buf;
-        int retval;
-
-        retval = nl_sock_recv(mon->sock, &buf, false);
-        if (retval == EAGAIN) {
-            return NULL;
-        } else if (retval == ENOBUFS) {
-            VLOG_WARN_RL(&slow_rl, "network monitor socket overflowed");
-            return all_netdevs_changed(mon);
-        } else if (retval) {
-            VLOG_WARN_RL(&slow_rl, "error on network monitor socket: %s",
-                         strerror(retval));
-            return NULL;
-        } else {
-            struct nlattr *attrs[ARRAY_SIZE(rtnlgrp_link_policy)];
-            const char *name;
-
-            if (!nl_policy_parse(buf, NLMSG_HDRLEN + sizeof(struct ifinfomsg),
-                                 rtnlgrp_link_policy,
-                                 attrs, ARRAY_SIZE(rtnlgrp_link_policy))) {
-                VLOG_WARN_RL(&slow_rl, "received bad rtnl message");
-                return all_netdevs_changed(mon);
-            }
-            name = lookup_netdev(mon, nl_attr_get_string(attrs[IFLA_IFNAME]));
-            ofpbuf_delete(buf);
-            if (name) {
-                /* Return the looked-up string instead of the attribute string,
-                 * because we freed the buffer that contains the attribute. */
-                return name;
-            }
-        }
-    }
+//     static struct vlog_rate_limit slow_rl = VLOG_RATE_LIMIT_INIT(1, 5);
+//     const char *changed_name;
+// 
+//     changed_name = pop_changed(mon);
+//     if (changed_name) {
+//         return changed_name;
+//     }
+// 
+//     for (;;) {
+//         struct ofpbuf *buf;
+//         int retval;
+// 
+//         retval = nl_sock_recv(mon->sock, &buf, false);
+//         if (retval == EAGAIN) {
+//             return NULL;
+//         } else if (retval == ENOBUFS) {
+//             VLOG_WARN_RL(&slow_rl, "network monitor socket overflowed");
+//             return all_netdevs_changed(mon);
+//         } else if (retval) {
+//             VLOG_WARN_RL(&slow_rl, "error on network monitor socket: %s",
+//                          strerror(retval));
+//             return NULL;
+//         } else {
+//             struct nlattr *attrs[ARRAY_SIZE(rtnlgrp_link_policy)];
+//             const char *name;
+// 
+//             if (!nl_policy_parse(buf, NLMSG_HDRLEN + sizeof(struct ifinfomsg),
+//                                  rtnlgrp_link_policy,
+//                                  attrs, ARRAY_SIZE(rtnlgrp_link_policy))) {
+//                 VLOG_WARN_RL(&slow_rl, "received bad rtnl message");
+//                 return all_netdevs_changed(mon);
+//             }
+//             name = lookup_netdev(mon, nl_attr_get_string(attrs[IFLA_IFNAME]));
+//             ofpbuf_delete(buf);
+//             if (name) {
+//                 /* Return the looked-up string instead of the attribute string,
+//                  * because we freed the buffer that contains the attribute. */
+//                 return name;
+//             }
+//         }
+//     }
+  return NULL;
 }
 
 void
@@ -1392,7 +1373,8 @@ netdev_monitor_run(struct netdev_monitor *mon UNUSED)
 void
 netdev_monitor_wait(struct netdev_monitor *mon)
 {
-    nl_sock_wait(mon->sock, POLLIN);
+  for(;;);
+    //nl_sock_wait(mon->sock, POLLIN);
 }
 
 static const char *
